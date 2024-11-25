@@ -126,14 +126,22 @@ export async function GET() {
       );
     } catch (error) {
       await client.query("ROLLBACK");
-      return new Response(JSON.stringify({ error: error.message }), {
+      /*return new Response(JSON.stringify({ error: error.message }), {
         status: 500,
-      });
+      });*/
+      return new Response(
+        JSON.stringify({ error: (error as Error).message }),
+        { status: 500 }
+      );
+      
     } finally {
       client.release();
     }
   } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), {
+    /*return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+    });*/
+    return new Response(JSON.stringify({ error: (error as Error).message }), {
       status: 500,
     });
   }
