@@ -25,7 +25,8 @@ export async function GET() {
   } catch (error) {
     console.error("Error fetching invoices:", error);
     return new Response(
-      JSON.stringify({ error: error.message || "An unknown error occurred" }),
+      //JSON.stringify({ error: error.message || "An unknown error occurred" }),
+      JSON.stringify({ error: (error as Error).message || "An unknown error occurred" }),
       { status: 500 }
     );
   }
