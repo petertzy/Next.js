@@ -1,0 +1,211 @@
+如果您的程式完全使用Neon（但仍然基於Postgres），實際上並不需要對代碼邏輯做很大改動。Neon與Postgres高度兼容，因此所有SQL查詢和表結構的代碼可以保持不變。關鍵是確保您的連接設定正確，並根據Neon的特性進行少量調整以優化效能和安全性。
+
+以下是如何針對您的程式做全面調整，使其專注於使用Neon：
+
+---
+
+### **1. 使用 `@neondatabase/serverless` 或其他專用庫**
+Neon提供專門的Node.js庫，例如 [`@neondatabase/serverless`](https://github.com/neondatabase/serverless)，適用於無伺服器環境（如Vercel、Cloudflare）。這些庫更適合Neon的現代設計。
+
+#### **安裝 `@neondatabase/serverless`**
+```bash
+npm install @neondatabase/serverless
+```
+
+#### **更新連接代碼**
+與傳統的 `pg` 不同，`@neondatabase/serverless` 更輕量並針對無伺服器場景進行了優化。以下是如何更新代碼：
+
+```javascript
+import { Pool } from "@neondatabase/serverless";
+import bcrypt from "bcrypt";
+import { invoices, customers, revenue, users } from "../lib/placeholder-data";
+
+// 初始化連接池
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
+
+async function seedUsers() {
+  await pool.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      password TEXT NOT NULL
+    );
+  `);
+
+  const insertedUsers = await Promise.all(
+    users.map(async (user) => {
+      const hashedPassword = await bcrypt.hash(user.password, 10);
+      return pool.query(
+        `INSERT INTO users (id, name, email, password)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (id) DO NOTHING`,
+        [user.id, user.name, user.email, hashedPassword]
+      );
+    })
+  );
+
+  return insertedUsers;
+}
+
+async function seedInvoices() {
+  await pool.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS invoices (
+      id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+      customer_id UUID NOT NULL,
+      amount INT NOT NULL,
+      status VARCHAR(255) NOT NULL,
+      date DATE NOT NULL
+    );
+  `);
+
+  const insertedInvoices = await Promise.all(
+    invoices.map((invoice) =>
+      pool.query(
+        `INSERT INTO invoices (customer_id, amount, status, date)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (id) DO NOTHING`,
+        [invoice.customer_id, invoice.amount, invoice.status, invoice.date]
+      )
+    )
+  );
+
+  return insertedInvoices;
+}
+
+async function seedCustomers() {
+  await pool.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS customers (
+      id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      email VARCHAR(255) NOT NULL,
+      image_url VARCHAR(255) NOT NULL
+    );
+  `);
+
+  const insertedCustomers = await Promise.all(
+    customers.map((customer) =>
+      pool.query(
+        `INSERT INTO customers (id, name, email, image_url)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (id) DO NOTHING`,
+        [customer.id, customer.name, customer.email, customer.image_url]
+      )
+    )
+  );
+
+  return insertedCustomers;
+}
+
+async function seedRevenue() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS revenue (
+      month VARCHAR(4) NOT NULL UNIQUE,
+      revenue INT NOT NULL
+    );
+  `);
+
+  const insertedRevenue = await Promise.all(
+    revenue.map((rev) =>
+      pool.query(
+        `INSERT INTO revenue (month, revenue)
+         VALUES ($1, $2)
+         ON CONFLICT (month) DO NOTHING`,
+        [rev.month, rev.revenue]
+      )
+    )
+  );
+
+  return insertedRevenue;
+}
+
+export async function GET() {
+  try {
+    // Neon建議：明確開始和結束事務
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await seedUsers();
+      await seedCustomers();
+      await seedInvoices();
+      await seedRevenue();
+      await client.query("COMMIT");
+
+      return new Response(
+        JSON.stringify({ message: "Database seeded successfully" }),
+        { status: 200 }
+      );
+    } catch (error) {
+      await client.query("ROLLBACK");
+      return new Response(JSON.stringify({ error: error.message }), {
+        status: 500,
+      });
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+    });
+  }
+}
+```
+
+---
+
+### **2. Neon的無伺服器最佳實踐**
+Neon的架構專為無伺服器場景設計，以下是一些實踐建議：
+
+#### **a. 啟用 `pgbouncer` 連接池**
+- 確保使用Neon提供的連接池（如 `DATABASE_URL` 預設包含 `pgbouncer`）。
+- 在連接池之外需要高頻繁連接時，可選用 `DATABASE_URL_UNPOOLED`。
+
+#### **b. 使用SSL**
+- Neon的URL中通常帶有 `?sslmode=require`，確保連接安全性。
+- 若使用 `pg`，請啟用SSL：
+  ```javascript
+  const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false },
+  });
+  ```
+
+#### **c. 節約連接**
+- Neon's無伺服器模式是基於事件的，使用 `@neondatabase/serverless` 的自動連接和釋放特性即可。
+
+---
+
+### **3. 使用 Prisma（可選）**
+如果您希望更高層級的抽象，可以考慮使用 [Prisma](https://www.prisma.io/) 管理Neon數據庫。
+
+- 安裝：
+  ```bash
+  npm install prisma @prisma/client
+  npx prisma init
+  ```
+- 在 `prisma/schema.prisma` 中配置Neon：
+  ```prisma
+  datasource db {
+    provider = "postgresql"
+    url      = env("DATABASE_URL")
+  }
+  ```
+- 使用 Prisma CLI 運行遷移和生成代碼：
+  ```bash
+  npx prisma migrate dev
+  npx prisma generate
+  ```
+
+這種方式適合更複雜的應用，並提供類型安全的數據訪問層。
+
+---
+
+### **結論**
+Neon與Postgres非常兼容，您的代碼不需要大幅更改。使用 `@neondatabase/serverless` 是最適合無伺服器環境的方式，它簡化了Neon的連接處理，同時保留了Postgres的強大功能。如果您需要高層級的數據訪問層，Prisma也是值得考慮的選項。

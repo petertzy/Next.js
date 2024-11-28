@@ -1,0 +1,13 @@
+cd nextjs-dashboard
+pnpm dev
+
+
+
+pnpm run dev
+
+
+
+
+
+
+https://nextjs.org/learn/dashboard-app/getting-started
